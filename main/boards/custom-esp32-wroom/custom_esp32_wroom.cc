@@ -12,6 +12,10 @@
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <esp_adc/adc_oneshot.h>
+#include "assets/lang_config.h"
 
 #define TAG "CustomESP32WROOM"
 
@@ -29,6 +33,14 @@ private:
     esp_lcd_panel_handle_t panel_ = nullptr;
     Display* display_ = nullptr;
     gpio_num_t fan_gpio_;
+    
+    // 火焰传感器相关
+    bool flame_detected_ = false;
+    TaskHandle_t flame_monitor_task_ = nullptr;
+    
+    // ADC 相关
+    adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+    adc_channel_t flame_adc_channel_;
 
     void InitializeDisplayI2c() {
         i2c_master_bus_config_t bus_config = {
@@ -115,6 +127,105 @@ private:
             Application::GetInstance().StopListening();
         });
     }
+    
+    void InitializeFlameSensor() {
+        // 初始化火焰传感器数字输入引脚
+        gpio_config_t io_conf = {};
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        io_conf.mode = GPIO_MODE_INPUT;
+        io_conf.pin_bit_mask = (1ULL << FLAME_SENSOR_D_GPIO);
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+        gpio_config(&io_conf);
+        
+        // 初始化 ADC 用于模拟输入
+        adc_oneshot_unit_init_cfg_t init_config = {
+            .unit_id = ADC_UNIT_1,
+        };
+        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle_));
+        
+        // 配置 ADC 通道（GPIO15 对应 ADC1_CHANNEL_5）
+        flame_adc_channel_ = ADC_CHANNEL_5;
+        adc_oneshot_chan_cfg_t chan_config = {
+            .atten = ADC_ATTEN_DB_12,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, flame_adc_channel_, &chan_config));
+    }
+    
+    void InitializeWaterPump() {
+        // 初始化水泵控制引脚
+        gpio_config_t io_conf = {};
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        io_conf.mode = GPIO_MODE_OUTPUT;
+        io_conf.pin_bit_mask = (1ULL << WATER_PUMP_GPIO_1) | (1ULL << WATER_PUMP_GPIO_2);
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        gpio_config(&io_conf);
+        
+        // 初始关闭水泵
+        gpio_set_level(WATER_PUMP_GPIO_1, 0);
+        gpio_set_level(WATER_PUMP_GPIO_2, 0);
+    }
+    
+    void SetWaterPumpState(bool state) {
+        gpio_set_level(WATER_PUMP_GPIO_1, state ? 1 : 0);
+        gpio_set_level(WATER_PUMP_GPIO_2, state ? 1 : 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        ESP_LOGI(TAG, "Water pump state set to: %s", state ? "on" : "off");
+    }
+    
+    static void FlameMonitorTask(void* arg) {
+        CustomESP32WROOM* board = static_cast<CustomESP32WROOM*>(arg);
+        int adc_value;
+        
+        while (true) {
+            // 读取数字输出
+            int digital_value = gpio_get_level(FLAME_SENSOR_D_GPIO);
+            
+            // 读取模拟输出
+            ESP_ERROR_CHECK(adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value));
+            
+            // 检测火焰（数字输出低电平表示检测到火焰）
+            bool current_flame_detected = (digital_value == 0);
+            
+            if (current_flame_detected && !board->flame_detected_) {
+                // 刚检测到火焰
+                board->flame_detected_ = true;
+                ESP_LOGE(TAG, "警告！检测到火焰，执行火场应急备案。");
+                ESP_LOGI(TAG, "Flame sensor - Digital: %d, Analog: %d", digital_value, adc_value);
+                
+                // 启动水泵
+                board->SetWaterPumpState(true);
+                
+                // 在显示屏上显示警告
+                auto display = board->GetDisplay();
+                if (display) {
+                    display->SetStatus("火警警告！");
+                    display->SetEmotion("fearful");
+                    display->SetChatMessage("system", "检测到火焰！启动水泵灭火！");
+                }
+            } else if (!current_flame_detected && board->flame_detected_) {
+                // 火焰消失
+                board->flame_detected_ = false;
+                ESP_LOGI(TAG, "火焰已熄灭，停止水泵");
+                
+                // 停止水泵
+                board->SetWaterPumpState(false);
+                
+                // 恢复正常显示
+                auto display = board->GetDisplay();
+                if (display) {
+                    display->SetStatus(Lang::Strings::STANDBY);
+                    display->SetEmotion("neutral");
+                    display->SetChatMessage("system", "");
+                }
+            }
+            
+            // 每 100ms 检测一次
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
 
 public:
     CustomESP32WROOM() : boot_button_(BOOT_BUTTON_GPIO), touch_button_(TOUCH_BUTTON_GPIO), asr_button_(ASR_BUTTON_GPIO)
@@ -127,6 +238,14 @@ public:
         InitializeDisplayI2c();
         InitializeSsd1306Display();
         InitializeButtons();
+        
+        // 初始化火焰传感器和水泵
+        InitializeFlameSensor();
+        InitializeWaterPump();
+        
+        // 创建火焰监测任务
+        xTaskCreate(FlameMonitorTask, "flame_monitor", 4096, this, 5, &flame_monitor_task_);
+        ESP_LOGI(TAG, "Flame monitor task started");
     }
 
     virtual AudioCodec* GetAudioCodec() override 
@@ -154,10 +273,14 @@ public:
         std::string json = WifiBoard::GetDeviceStatusJson();
         // 添加风扇状态
         bool fan_state = gpio_get_level(fan_gpio_) == 1;
+        // 添加水泵状态
+        bool pump_state = gpio_get_level(WATER_PUMP_GPIO_1) == 1;
         size_t pos = json.find_last_of('}');
         if (pos != std::string::npos) {
-            std::string fan_json = std::string(",\"fan\":{\"state\":\"") + (fan_state ? "on" : "off") + "\"}";
-            json.insert(pos, fan_json);
+            std::string status_json = std::string(",\"fan\":{\"state\":\"") + (fan_state ? "on" : "off") + "\"}";
+            status_json += std::string(",\"water_pump\":{\"state\":\"") + (pump_state ? "on" : "off") + "\"}";
+            status_json += std::string(",\"flame_sensor\":{\"detected\":\"") + (flame_detected_ ? "true" : "false") + "\"}";
+            json.insert(pos, status_json);
         }
         return json;
     }

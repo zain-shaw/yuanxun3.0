@@ -1,12 +1,14 @@
 {
   "name": "元巡",
-  "description": "Custom board with ESP32-WROOM-32E, ZTS6631 microphone, NS4168 audio amplifier, 12 Neopixel RGB LEDs, SSD1315 OLED display, and fan",
+  "description": "Custom board with ESP32-WROOM-32E, ZTS6631 microphone, NS4168 audio amplifier, 12 Neopixel RGB LEDs, SSD1315 OLED display, fan, flame sensor, and water pump",
   "platform": "esp32",
   "options": {
     "display": "oled_ssd1306_128x64",
     "audio_input": "i2s",
     "audio_output": "i2s",
     "rgb_led": "neopixel",
-    "fan": true
+    "fan": true,
+    "flame_sensor": true,
+    "water_pump": true
   }
 }
