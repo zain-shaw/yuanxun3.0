@@ -138,19 +138,28 @@ private:
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
         gpio_config(&io_conf);
         
-        // 初始化 ADC 用于模拟输入
+        // 初始化 ADC 用于模拟输入（使用 ADC2，GPIO15 对应 ADC2_CHANNEL_3）
         adc_oneshot_unit_init_cfg_t init_config = {
-            .unit_id = ADC_UNIT_1,
+            .unit_id = ADC_UNIT_2,
         };
-        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle_));
+        esp_err_t err = adc_oneshot_new_unit(&init_config, &adc_handle_);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize ADC2: %s", esp_err_to_name(err));
+            return;
+        }
         
-        // 配置 ADC 通道（GPIO15 对应 ADC1_CHANNEL_5）
-        flame_adc_channel_ = ADC_CHANNEL_5;
+        // 配置 ADC 通道（GPIO15 对应 ADC2_CHANNEL_3）
+        flame_adc_channel_ = ADC_CHANNEL_3;
         adc_oneshot_chan_cfg_t chan_config = {
             .atten = ADC_ATTEN_DB_12,
             .bitwidth = ADC_BITWIDTH_DEFAULT,
         };
-        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, flame_adc_channel_, &chan_config));
+        err = adc_oneshot_config_channel(adc_handle_, flame_adc_channel_, &chan_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure ADC channel: %s", esp_err_to_name(err));
+            return;
+        }
+        ESP_LOGI(TAG, "Flame sensor initialized successfully");
     }
     
     void InitializeWaterPump() {
@@ -183,8 +192,12 @@ private:
             // 读取数字输出
             int digital_value = gpio_get_level(FLAME_SENSOR_D_GPIO);
             
-            // 读取模拟输出
-            ESP_ERROR_CHECK(adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value));
+            // 读取模拟输出（添加错误处理）
+            esp_err_t err = adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to read ADC: %s", esp_err_to_name(err));
+                adc_value = 0;
+            }
             
             // 检测火焰（数字输出低电平表示检测到火焰）
             bool current_flame_detected = (digital_value == 0);
@@ -239,13 +252,19 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         
-        // 初始化火焰传感器和水泵
-        InitializeFlameSensor();
+        // 初始化水泵
         InitializeWaterPump();
         
-        // 创建火焰监测任务
-        xTaskCreate(FlameMonitorTask, "flame_monitor", 4096, this, 5, &flame_monitor_task_);
-        ESP_LOGI(TAG, "Flame monitor task started");
+        // 初始化火焰传感器
+        InitializeFlameSensor();
+        
+        // 只有在 ADC 初始化成功后才创建火焰监测任务
+        if (adc_handle_ != nullptr) {
+            xTaskCreate(FlameMonitorTask, "flame_monitor", 4096, this, 5, &flame_monitor_task_);
+            ESP_LOGI(TAG, "Flame monitor task started");
+        } else {
+            ESP_LOGW(TAG, "Flame sensor ADC not initialized, skipping flame monitor task");
+        }
     }
 
     virtual AudioCodec* GetAudioCodec() override 
