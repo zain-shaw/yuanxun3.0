@@ -186,26 +186,27 @@ private:
     
     static void FlameMonitorTask(void* arg) {
         CustomESP32WROOM* board = static_cast<CustomESP32WROOM*>(arg);
-        int adc_value;
+        int adc_value = 0;
         
         while (true) {
-            // 读取数字输出
+            // 读取数字输出（低电平表示检测到火焰）
             int digital_value = gpio_get_level(FLAME_SENSOR_D_GPIO);
-            
-            // 读取模拟输出（添加错误处理）
-            esp_err_t err = adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to read ADC: %s", esp_err_to_name(err));
-                adc_value = 0;
-            }
-            
-            // 检测火焰（数字输出低电平表示检测到火焰）
             bool current_flame_detected = (digital_value == 0);
             
             if (current_flame_detected && !board->flame_detected_) {
                 // 刚检测到火焰
                 board->flame_detected_ = true;
-                ESP_LOGE(TAG, "警告！检测到火焰，执行火场应急备案。");
+                
+                // 读取模拟值用于报警信息
+                if (board->adc_handle_ != nullptr) {
+                    esp_err_t err = adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to read ADC: %s", esp_err_to_name(err));
+                        adc_value = 0;
+                    }
+                }
+                
+                ESP_LOGE(TAG, "警告！检测到火焰，执行火场应急备案。ADC值: %d", adc_value);
                 ESP_LOGI(TAG, "Flame sensor - Digital: %d, Analog: %d", digital_value, adc_value);
                 
                 // 启动水泵
@@ -218,25 +219,51 @@ private:
                     display->SetEmotion("fearful");
                     display->SetChatMessage("system", "检测到火焰！启动水泵灭火！");
                 }
-            } else if (!current_flame_detected && board->flame_detected_) {
-                // 火焰消失
-                board->flame_detected_ = false;
-                ESP_LOGI(TAG, "火焰已熄灭，停止水泵");
                 
-                // 停止水泵
-                board->SetWaterPumpState(false);
-                
-                // 恢复正常显示
-                auto display = board->GetDisplay();
-                if (display) {
-                    display->SetStatus(Lang::Strings::STANDBY);
-                    display->SetEmotion("neutral");
-                    display->SetChatMessage("system", "");
+                // 进入火警模式，实时监测模拟值
+                while (board->flame_detected_) {
+                    // 读取数字输出
+                    digital_value = gpio_get_level(FLAME_SENSOR_D_GPIO);
+                    current_flame_detected = (digital_value == 0);
+                    
+                    if (!current_flame_detected) {
+                        // 火焰消失
+                        board->flame_detected_ = false;
+                        ESP_LOGI(TAG, "火焰已熄灭，停止水泵");
+                        
+                        // 停止水泵
+                        board->SetWaterPumpState(false);
+                        
+                        // 恢复正常显示
+                        auto display = board->GetDisplay();
+                        if (display) {
+                            display->SetStatus(Lang::Strings::STANDBY);
+                            display->SetEmotion("neutral");
+                            display->SetChatMessage("system", "");
+                        }
+                        break;
+                    }
+                    
+                    // 实时读取模拟值
+                    if (board->adc_handle_ != nullptr) {
+                        esp_err_t err = adc_oneshot_read(board->adc_handle_, board->flame_adc_channel_, &adc_value);
+                        if (err == ESP_OK) {
+                            // 每 200ms 输出一次模拟值
+                            static int count = 0;
+                            if (count % 2 == 0) {
+                                ESP_LOGI(TAG, "Fire detected - ADC value: %d", adc_value);
+                            }
+                            count++;
+                        }
+                    }
+                    
+                    // 实时监测，200ms 一次
+                    vTaskDelay(pdMS_TO_TICKS(200));
                 }
             }
             
-            // 每 100ms 检测一次
-            vTaskDelay(pdMS_TO_TICKS(100));
+            // 正常模式，每 500ms 检测一次数字引脚
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
     }
 
