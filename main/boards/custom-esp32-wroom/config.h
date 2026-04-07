@@ -49,11 +49,11 @@
 #define FAN_GPIO GPIO_NUM_5
 
 // Flame Sensor
-#define FLAME_SENSOR_D_GPIO GPIO_NUM_14  // 数字输出
-#define FLAME_SENSOR_A_GPIO GPIO_NUM_15  // 模拟输出
+#define FLAME_SENSOR_D_GPIO GPIO_NUM_18  // 数字输出
+#define FLAME_SENSOR_A_GPIO GPIO_NUM_36  // 模拟输出
 
 // Water Pump
-#define WATER_PUMP_GPIO_1 GPIO_NUM_16
-#define WATER_PUMP_GPIO_2 GPIO_NUM_17
+#define WATER_PUMP_GPIO_1 GPIO_NUM_14
+#define WATER_PUMP_GPIO_2 GPIO_NUM_15
 
 #endif // _BOARD_CONFIG_H_
