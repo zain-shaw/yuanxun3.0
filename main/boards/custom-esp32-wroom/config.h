@@ -41,19 +41,20 @@
 #define DISPLAY_MIRROR_X false
 #define DISPLAY_MIRROR_Y false
 
-// RGB LED
+// RGBLED灯
 #define RGB_LED_GPIO GPIO_NUM_13
 #define RGB_LED_COUNT 12
 
-// Fan
+// 风扇
 #define FAN_GPIO GPIO_NUM_5
 
-// Flame Sensor
+// 火焰传感器
 #define FLAME_SENSOR_D_GPIO GPIO_NUM_18  // 数字输出
 #define FLAME_SENSOR_A_GPIO GPIO_NUM_36  // 模拟输出
 
-// Water Pump
+// 水泵
 #define WATER_PUMP_GPIO_1 GPIO_NUM_14
 #define WATER_PUMP_GPIO_2 GPIO_NUM_15
 
 #endif // _BOARD_CONFIG_H_
+
