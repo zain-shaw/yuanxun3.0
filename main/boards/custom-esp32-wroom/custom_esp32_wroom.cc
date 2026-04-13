@@ -337,7 +337,6 @@ public:
         // 添加短暂延迟确保GPIO操作完成
         vTaskDelay(pdMS_TO_TICKS(10));
         ESP_LOGI(TAG, "Fan state set to: %s", state ? "on" : "off");
-        00
     }
 
     // 控制RGB灯
